@@ -17,6 +17,14 @@ import (
 var Logger *log.Logger = log.New(os.Stdout, "[main] ", log.Lshortfile)
 
 
+// Returned codes : 
+
+// 401 - not authenticated (back-end reachable but user not authenticated --> authenticate first)
+// 500 - internal error : golang part failed in something
+// 502 - bad gateway : back-end service bug triggered (back-end reachable but the action has triggered a bug, so a bad response --> retry with different request)
+// 503 - service unavailable : (back-end service not reachable ----> check your connection or check that back-end is not down)
+// 200 or any other - Not the above
+
 var CookieJar, _ = cookiejar.New(nil)
 var Client = &http.Client{
     	Jar: CookieJar,
@@ -66,17 +74,19 @@ func pingServer() (bool, bool) {
 	return isOnline, isAuthenticated
 }
 
-func requestAuthentication( user string, pass string, loginUrl string ) ( cookie *http.Cookie, err error) {
+func requestAuthentication( user string, pass string, loginUrl string ) ( cookie *http.Cookie, status_code int) {
 
     sessionId := new (http.Cookie)
 	response_get_token, err := http.Get(loginUrl)
 	if err != nil {
-        return sessionId, err
+		fmt.Println("ERROR IN THE INITIAL!!!!!")
+        return sessionId, 503
     }
 
     csrf_token, err := getCookieOfType( "csrftoken", response_get_token.Cookies())
 	if err != nil {
-        return sessionId, err
+		fmt.Println("SERVER UNREACHABLE!!!!!")
+        return sessionId, 502
     }
 
     // Updating the CookieJar for Server URL with just the new csrf_token
@@ -92,15 +102,16 @@ func requestAuthentication( user string, pass string, loginUrl string ) ( cookie
 	request_get_session.AddCookie(csrf_token)
 	_, err = Client.Do(request_get_session)
 	if err != nil{
-        return sessionId, err
+        return sessionId, 503
     }
 
 	sessionId, err = getCookieOfType( "sessionid", CookieJar.Cookies(globalServerUrl))
 	if err != nil{
-        return sessionId, err
+		fmt.Println("ERROR IN session extraction !!!! !!!!!")
+        return sessionId, 401
     }
 
-	return sessionId, nil
+	return sessionId, 200
 }
 
 func redirection_to_auth_handler(w http.ResponseWriter, req *http.Request) {
@@ -116,10 +127,10 @@ func redirection_to_auth_handler(w http.ResponseWriter, req *http.Request) {
 			return 
 		}
 
-		sessionId, err := requestAuthentication( u.User, u.Pass, globalServerUrlString + "/accounts/login/?next=/ping" )
-		if err != nil{
-        	fmt.Println("\n::::::: MMMMM .... Also trying to establish it failed. I am quite in trouble. - Returning 401\n")
-        	w.WriteHeader(401)
+		sessionId, status_code := requestAuthentication( u.User, u.Pass, globalServerUrlString + "/accounts/login/?next=/ping" )
+		if status_code != 200{
+        	fmt.Println("\n::::::: MMMMM .... Also trying to establish it failed. I am quite in trouble. - Returning\n", status_code)
+        	w.WriteHeader(status_code)
     		return
     	}
 
@@ -135,16 +146,20 @@ func redirection_to_static_handler(w http.ResponseWriter, req *http.Request) {
 		fmt.Println("\n::::::: GET : STATIC FILE : ", req.RequestURI)
  		
  		r, err := http.Get(globalServerUrlString + req.RequestURI)
- 		
- 		if( err == nil && r.Status == "200 OK" ){
- 			copy_headers(w, r)
-			defer r.Body.Close()
- 			body, _ := ioutil.ReadAll(r.Body)
- 			w.Write(body)
- 		}else{
- 			w.WriteHeader(502)
+ 		if( err != nil ){
+ 			w.WriteHeader(503)
+ 			return
  		}
 
+ 		// TODO : HERE I SHOULD COPY THE RETURN STATUS CODE, OTHERWISE IT RETURNS 200 WHEN IT SHOULD RETURN 404 OR OTHER
+		if ( r.Status == "200 OK" ){
+			copy_headers(w, r)
+			defer r.Body.Close()
+			body, _ := ioutil.ReadAll(r.Body)
+			w.Write(body) 	
+		}else{
+			w.WriteHeader(r.StatusCode)
+		}
  		fmt.Println("\n::::::: END. \n\n\n")
  	}
 }
@@ -165,23 +180,17 @@ func redirection_to_api_handler(w http.ResponseWriter, req *http.Request) {
 	reqForward.Header.Set("Content-Type", "application/json")
 	reqForward.AddCookie(sessionId)
     r, err := Client.Do(reqForward)
-
     if err != nil {
-    	fmt.Println("::::::: ERROR calling this API. Returning 500 \n\n\n")
-    	w.WriteHeader(500)
+    	fmt.Println("::::::: ERROR calling this API. Returning 503 \n\n\n")
+    	w.WriteHeader(503)
     	return
     }
 
-    if( r.Status == "200 OK" ){
-    	copy_headers(w, r)
-		defer r.Body.Close()
-		body, _ = ioutil.ReadAll(r.Body)
-		w.Write(body)	
-    }else{
-    	fmt.Println("::::::: Ok ... result is actually not ok. Returning just the status code :  ", r.Status)
-		w.WriteHeader(501)
-    }
-
+    w.WriteHeader(r.StatusCode)
+    copy_headers(w, r)
+	defer r.Body.Close()
+	body, _ = ioutil.ReadAll(r.Body)
+	w.Write(body)	
 	fmt.Println("::::::: END. \n\n\n")
 }
 
