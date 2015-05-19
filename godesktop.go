@@ -51,7 +51,7 @@ func copy_headers(w http.ResponseWriter, resp *http.Response){
 func getCookieOfType( cookieType string, cookieSlice []*http.Cookie) (cookie *http.Cookie, err error) {
 
 	for _, cookie := range cookieSlice {
-		fmt.Println("\nCookie : ", cookie.Name, " - ", cookie.Value, " - ", cookie.Domain, " - ", cookie.Path )
+		//fmt.Println("\nCookie : ", cookie.Name, " - ", cookie.Value, " - ", cookie.Domain, " - ", cookie.Path )
     	if cookie.Name == cookieType {
     		return cookie, nil
         }
